@@ -21,9 +21,10 @@ fi
 usage() {
   cat <<'USAGE' >&2
 Usage:
-  note [-t title]
-  note show [id]
-  note edit [-t title] [id]
+  note <title>
+  note -i <id>
+  note show <title>
+  note show -i <id>
   note pop
   note list
   note search <query>
@@ -113,6 +114,30 @@ fetch_record() {
         if (found) exit 0; else exit 1
       }
     }
+  ' "$note_file"
+}
+
+fetch_record_by_title() {
+  target="$1"
+  [ -f "$note_file" ] || return 1
+  awk -v sep="$separator" -v target="$target" '
+    BEGIN { RS = sep "\n"; ORS=""; found=0 }
+    NR>1 && NF {
+      n = split($0, lines, "\n")
+      rec_id=""; rec_title=""; body=""
+      for (i=1; i<=n; i++) {
+        line = lines[i]
+        if (rec_id=="" && line ~ /^id: /) { rec_id = substr(line, 5); continue }
+        if (rec_title=="" && line ~ /^title: /) { rec_title = substr(line, 8); continue }
+        body = body (body=="" ? "" : "\n") line
+      }
+      if (rec_title == target) {
+        print rec_id "\037" rec_title "\037" body
+        found=1
+        exit
+      }
+    }
+    END { if (found) exit 0; else exit 1 }
   ' "$note_file"
 }
 
@@ -232,16 +257,7 @@ print_note() {
 }
 
 create_note() {
-  title=""
-  OPTIND=1
-  while getopts ':t:' opt; do
-    case "$opt" in
-      t) title="$OPTARG" ;;
-      *) usage ;;
-    esac
-  done
-  shift $((OPTIND - 1))
-  [ "$#" -eq 0 ] || usage
+  title="${1:-}"
 
   tmp=$(mktemp)
   trap 'rm -f "$tmp"' EXIT INT TERM
@@ -257,35 +273,29 @@ create_note() {
 }
 
 show_note() {
-  target="$1"
-  record=$(fetch_record "$target") || { echo 'Note not found.' >&2; return 1; }
-  split_record "$record"
-  print_note
-}
-
-edit_note() {
-  title_override=""
+  use_id=0
   OPTIND=1
-  while getopts ':t:' opt; do
+  while getopts ':i' opt; do
     case "$opt" in
-      t) title_override="$OPTARG" ;;
+      i) use_id=1 ;;
       *) usage ;;
     esac
   done
   shift $((OPTIND - 1))
-  case "$#" in
-    0) target_id="" ;;
-    1) target_id="$1" ;;
-    *) usage ;;
-  esac
+  target="${1:-}"
 
-  if [ -n "$target_id" ]; then
-    record=$(fetch_record "$target_id") || { echo 'Note not found.' >&2; return 1; }
+  if [ "$use_id" -eq 1 ]; then
+    record=$(fetch_record "$target") || { echo 'Note not found.' >&2; return 1; }
   else
-    record=$(fetch_record "") || { echo 'No notes to edit.' >&2; return 1; }
+    record=$(fetch_record_by_title "$target") || { echo 'Note not found.' >&2; return 1; }
   fi
   split_record "$record"
-  [ -n "$title_override" ] && note_title="$title_override"
+  print_note
+}
+
+open_note() {
+  record="$1"
+  split_record "$record"
 
   tmp=$(mktemp)
   trap 'rm -f "$tmp"' EXIT INT TERM
@@ -298,9 +308,34 @@ edit_note() {
     trap - EXIT INT TERM
     return 1
   fi
-
   rm -f "$tmp"
   trap - EXIT INT TERM
+}
+
+create_or_open() {
+  title="$1"
+
+  if record=$(fetch_record_by_title "$title" 2>/dev/null); then
+    open_note "$record"
+  else
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' EXIT INT TERM
+    "$editor" "$tmp"
+    content=$(cat "$tmp")
+    trap - EXIT INT TERM
+    rm -f "$tmp"
+    [ -n "$content" ] || { echo 'Note not saved (empty).' >&2; return 1; }
+
+    id=$(unique_id)
+    append_record "$id" "$title" "$content"
+    printf 'Saved note %s%s%s\n' "$color_id" "$id" "$color_reset"
+  fi
+}
+
+open_by_id() {
+  target="$1"
+  record=$(fetch_record "$target") || { echo 'Note not found.' >&2; return 1; }
+  open_note "$record"
 }
 
 pop_note() {
@@ -469,19 +504,12 @@ cmd=${1-}
 case "$cmd" in
   "")
     require_note_file
-    create_note "$@"
+    create_note
     ;;
   show)
     shift
-    if [ $# -gt 1 ]; then usage; fi
     require_note_file
-    target=${1-}
-    show_note "$target"
-    ;;
-  edit)
-    shift
-    require_note_file
-    edit_note "$@"
+    show_note "$@"
     ;;
   pop)
     shift
@@ -509,14 +537,18 @@ case "$cmd" in
   help|--help|-h)
     usage
     ;;
-  -t)
+  -i)
+    shift
+    [ $# -eq 1 ] || usage
     require_note_file
-    create_note "$@"
+    open_by_id "$1"
     ;;
-  --*)
+  -*)
     usage
     ;;
   *)
-    usage
+    [ $# -eq 1 ] || usage
+    require_note_file
+    create_or_open "$1"
     ;;
 esac
