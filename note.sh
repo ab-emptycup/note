@@ -282,12 +282,11 @@ show_note() {
     esac
   done
   shift $((OPTIND - 1))
-  target="${1:-}"
 
   if [ "$use_id" -eq 1 ]; then
-    record=$(fetch_record "$target") || { echo 'Note not found.' >&2; return 1; }
+    record=$(fetch_record "$1") || { echo 'Note not found.' >&2; return 1; }
   else
-    record=$(fetch_record_by_title "$target") || { echo 'Note not found.' >&2; return 1; }
+    record=$(fetch_record_by_title "$*") || { echo 'Note not found.' >&2; return 1; }
   fi
   split_record "$record"
   print_note
@@ -547,8 +546,8 @@ case "$cmd" in
     usage
     ;;
   *)
-    [ $# -eq 1 ] || usage
+    [ $# -ge 1 ] || usage
     require_note_file
-    create_or_open "$1"
+    create_or_open "$*"
     ;;
 esac
